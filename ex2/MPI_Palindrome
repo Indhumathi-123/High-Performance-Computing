@@ -1,0 +1,57 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <mpi.h>
+
+int is_palindrome(const char *str, int length) {
+    for (int i = 0; i < length / 2; i++) {
+        if (tolower(str[i]) != tolower(str[length - i - 1])) {
+            return 0; // Not a palindrome
+        }
+    }
+    return 1; // Is a palindrome
+}
+
+void to_uppercase(char *str) {
+    for (int i = 0; str[i]; i++) {
+        str[i] = toupper(str[i]);
+    }
+}
+
+int main(int argc, char** argv) {
+    int rank, size;
+    const char *uppercase_string = "hello"; // String to convert to uppercase
+    const char *palindrome_check_string = "madam"; // String to check for palindrome
+    double start_time, end_time;
+
+    // Initialize MPI
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    // Start timing
+    start_time = MPI_Wtime();
+
+    if (rank % 2 == 0) { // Processes 0, 2, 4 print uppercase
+        char upper_string[100]; // Assuming the string length is less than 100
+        strcpy(upper_string, uppercase_string);
+        to_uppercase(upper_string);
+        printf("Process %d (Uppercase): \"%s\"\n", rank, upper_string);
+    } else { // Processes 1, 3 check for palindrome
+        int palindrome_result = is_palindrome(palindrome_check_string, strlen(palindrome_check_string));
+        printf("Process %d (Palindrome Check): \"%s\"\n", rank, palindrome_check_string);
+        printf("Process %d Palindrome: %s\n", rank, palindrome_result ? "Yes" : "No");
+    }
+
+    // End timing
+    end_time = MPI_Wtime();
+
+    // Print execution time in nanoseconds from each process
+    long long execution_time_ns = (end_time - start_time) * 1e9; // Convert to nanoseconds
+    printf("Process %d Execution Time: %lld nanoseconds\n", rank, execution_time_ns);
+
+    // Finalize MPI
+    MPI_Finalize();
+    return 0;
+}
