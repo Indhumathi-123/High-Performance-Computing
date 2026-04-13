@@ -1,0 +1,174 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
+#include <time.h>
+#include <string.h>
+
+#define BUFFER_SIZE 10
+#define NUM_OPERATIONS 4 // Add, Sub, Mul, Div
+#define MAX_WORK 10      // Limit for simulation purposes
+
+// Operation types
+typedef enum {
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV
+} OpType;
+
+// Work structure
+typedef struct {
+    int a;
+    int b;
+    OpType type;
+    int id;
+} WorkItem;
+
+// Shared Buffer and Synchronization
+WorkItem work_buffer[BUFFER_SIZE];
+int in = 0;
+int out = 0;
+sem_t empty;        // Counts empty slots in buffer
+sem_t full;         // Counts filled slots in buffer
+pthread_mutex_t mutex;       // Protects buffer indices
+pthread_mutex_t file_mutex;  // Protects writing to the result file
+FILE *result_file;
+
+// Producer: Server generating random tasks
+void* server_producer(void* arg) {
+    for (int i = 0; i < MAX_WORK; i++) {
+        WorkItem item;
+        item.a = rand() % 100;
+        item.b = (rand() % 99) + 1; // Avoid division by zero
+        item.type = (OpType)(rand() % 4);
+        item.id = i + 1;
+
+        sem_wait(&empty);
+        pthread_mutex_lock(&mutex);
+
+        work_buffer[in] = item;
+        in = (in + 1) % BUFFER_SIZE;
+
+        // Perform a "pre-calculation" for display in the Producer
+        double pre_result = 0;
+        char op_char;
+        switch (item.type) {
+            case OP_ADD: pre_result = item.a + item.b; op_char = '+'; break;
+            case OP_SUB: pre_result = item.a - item.b; op_char = '-'; break;
+            case OP_MUL: pre_result = item.a * item.b; op_char = '*'; break;
+            case OP_DIV: pre_result = (double)item.a / item.b; op_char = '/'; break;
+        }
+
+        // Output task generation AND result to console immediately
+        printf("Generated Task %d: %d %c %d = %.2f\n",
+               item.id, item.a, op_char, item.b, pre_result);
+
+        pthread_mutex_unlock(&mutex);
+        sem_post(&full);
+
+        usleep(100000); // Small delay to simulate work
+    }
+    return NULL;
+}
+
+// Consumer: Computing threads
+void* worker_consumer(void* arg) {
+    OpType my_type = *(OpType*)arg;
+    const char* type_str = (my_type == OP_ADD ? "Addition" :
+                            my_type == OP_SUB ? "Subtraction" :
+                            my_type == OP_MUL ? "Multiplication" : "Division");
+    while (1) {
+        sem_wait(&full);
+        pthread_mutex_lock(&mutex);
+
+        // Check the current item at the 'out' index
+        WorkItem item = work_buffer[out];
+
+        if (item.type != my_type) {
+            // Not the right thread for this operation, release and yield
+            pthread_mutex_unlock(&mutex);
+            sem_post(&full);
+            usleep(1000);
+            continue;
+        }
+
+        // consume the item
+        out = (out + 1) % BUFFER_SIZE;
+        pthread_mutex_unlock(&mutex);
+        sem_post(&empty);
+
+        // Perform calculation
+        double result = 0;
+        char op_char;
+        switch (item.type) {
+            case OP_ADD: result = item.a + item.b; op_char = '+'; break;
+            case OP_SUB: result = item.a - item.b; op_char = '-'; break;
+            case OP_MUL: result = item.a * item.b; op_char = '*'; break;
+            case OP_DIV: result = (double)item.a / item.b; op_char = '/'; break;
+        }
+
+        // Log result to console for visibility
+        printf("[%s Thread] Processed Task %d: %d %c %d = %.2f\n",
+               type_str, item.id, item.a, op_char, item.b, result);
+
+        // Write result to file
+        pthread_mutex_lock(&file_mutex);
+        if (result_file) {
+            fprintf(result_file, "Task %d [%s Thread]: %d %c %d = %.2f\n",
+                    item.id, type_str, item.a, op_char, item.b, result);
+            fflush(result_file);
+        }
+        pthread_mutex_unlock(&file_mutex);
+    }
+    return NULL;
+}
+
+int main() {
+    srand(time(NULL));
+    result_file = fopen("results.txt", "w");
+    if (!result_file) {
+        perror("Failed to open result file");
+        return 1;
+    }
+
+    printf("Starting Producer-Consumer Math Simulation...\n");
+   // printf(===========================================\n\n
+
+    // Initialize sync primitives
+    sem_init(&empty, 0, BUFFER_SIZE);
+    sem_init(&full, 0, 0);
+    pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_init(&file_mutex, NULL);
+
+    pthread_t server_tid;
+    pthread_t worker_tids[NUM_OPERATIONS];
+    OpType types[NUM_OPERATIONS] = {OP_ADD, OP_SUB, OP_MUL, OP_DIV};
+
+    // Create server thread
+    pthread_create(&server_tid, NULL, server_producer, NULL);
+
+    // Create 4 worker threads (one for each operation)
+    for (int i = 0; i < NUM_OPERATIONS; i++) {
+        pthread_create(&worker_tids[i], NULL, worker_consumer, &types[i]);
+    }
+
+    // Wait for the producer to finish generating tasks
+    pthread_join(server_tid, NULL);
+
+    // Give workers time to finish processing items in the buffer
+    sleep(2);
+
+    //printf(\n===========================================\n
+    printf("Check 'results.txt' for the final log.\n");
+
+    // Cleanup
+    fclose(result_file);
+    sem_destroy(&empty);
+    sem_destroy(&full);
+    pthread_mutex_destroy(&mutex);
+    pthread_mutex_destroy(&file_mutex);
+
+    return 0;
+}
